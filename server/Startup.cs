@@ -14,6 +14,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
+using System;
 
 namespace WebApi
 {
@@ -35,11 +36,41 @@ namespace WebApi
         public void ConfigureServices(IServiceCollection services)
         {
             services.AddCors();
-            services.AddDbContext<DataContext>(x => x.UseInMemoryDatabase());
+            // InMemory db needs to be named in 2.0
+            services.AddDbContext<DataContext>(options => options.UseInMemoryDatabase("base"));
             services.AddMvc();
             services.AddAutoMapper();
 
             services.Configure<AppSettings>(Configuration.GetSection("AppSettings"));
+
+            // as far as I understand, a service locator. Ewww.
+            var serviceProvider = services.BuildServiceProvider();
+            var appSettings = serviceProvider.GetService<IOptions<AppSettings>>().Value;
+            
+            services.AddAuthentication(options => {
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            }).AddJwtBearer(options => {
+                options.Authority = appSettings.ServerSiteUrl;
+                options.Audience = appSettings.ClientSiteUrl;
+                options.TokenValidationParameters = new TokenValidationParameters() {                
+                    // Checking the key.
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(appSettings.Secret)),
+                     
+                    // Validate JWT Audience (aud) claim
+                    ValidateAudience = true,
+                    ValidAudience = appSettings.ServerSiteUrl,
+
+                    // Validate JWT Issuer (iss) claim
+                    ValidateIssuer = true,
+                    ValidIssuer = appSettings.ClientSiteUrl,
+
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.Zero,
+                };
+            });
+            
 
             // configure DI for application services
             services.AddScoped<IUserService, UserService>();
@@ -58,19 +89,7 @@ namespace WebApi
                 .AllowAnyHeader()
                 .AllowCredentials());
 
-            // configure jwt authentication
-            var appSettings = app.ApplicationServices.GetService<IOptions<AppSettings>>().Value;
-            var key = Encoding.ASCII.GetBytes(appSettings.Secret);
-            app.UseJwtBearerAuthentication(new JwtBearerOptions{
-                AutomaticAuthenticate = true,
-                TokenValidationParameters = new TokenValidationParameters {
-                    ValidateIssuerSigningKey = true,
-                    IssuerSigningKey = new SymmetricSecurityKey(key),
-                    ValidateIssuer = false,
-                    ValidateAudience = false
-                }
-            });
-
+            app.UseAuthentication();
             app.UseMvc();
         }
     }
